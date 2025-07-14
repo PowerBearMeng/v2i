@@ -12,7 +12,8 @@
 		* 2.3.5. [bev.py:](#bev.py:)
 		* 2.3.6. [preprocess.py:](#preprocess.py:)
 		* 2.3.7. [detection.py:](#detection.py:)
-		* 2.3.8. [部分](#-1)
+		* 2.3.8. [fuse.py:](#fuse.py:)
+		* 2.3.9. [部分](#-1)
 	* 2.4. [main函数](#main)
 		* 2.4.1. [main.py](#main.py)
 		* 2.4.2. [main_box.py](#main_box.py)
@@ -73,7 +74,10 @@ ros2zmq_send_udp.py（Udp目前有问题）
 ####  2.3.7. <a name='detection.py:'></a>detection.py:
 提供动态物体检测功能，支持DBSCAN聚类及基于区域增长的动态点检测。
 
-####  2.3.8. <a name='-1'></a>部分
+####  2.3.8. <a name='fuse.py:'></a>fuse.py:
+提供点云融合功能，支持GPS坐标转换和ICP精细配准。自动对齐和融合两个点云文件。
+
+####  2.3.9. <a name='-1'></a>部分
 calculate.py和dbscan.py后续没有使用 没有说明
 
 ###  2.4. <a name='main'></a>main函数
