@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 # === 用户参数 ===
-bag_path = "/home/yty/mfh/robosense/0709_sta_03"  # 替换成你的bag路径
+bag_path = "/home/yty/mfh/bag_list/0718_i_02"  # 替换成你的bag路径
 topic_name = "/rslidar_points"
 output_dir = "/home/yty/mfh/mot/my_mot/pcd/"+ bag_path.split('/')[-1]
 

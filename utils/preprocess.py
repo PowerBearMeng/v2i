@@ -11,7 +11,7 @@ class PointCloudPreprocessor:
     def __init__(self, model_pcd_path=None, 
                  ground_dist_threshold=0.1,
                  num_iterations=1000,
-                 verbose=False):
+                 verbose=True):
         self.plane_model = None
         self.verbose = verbose
         if model_pcd_path:
@@ -92,6 +92,11 @@ class PointCloudPreprocessor:
 
     def preprocess(self, pcd, config):
         processed_pcd = pcd
+        voxel_size = config.get('voxel_size')
+        if voxel_size and voxel_size > 0:
+            processed_pcd = processed_pcd.voxel_down_sample(voxel_size)
+            if self.verbose:
+                print(f"-> 体素下采样后 ({voxel_size}m): {len(processed_pcd.points)} 点")
         if self.verbose:
             print(f"\n开始预处理，原始点数: {len(processed_pcd.points)}")
         if 'filter_by_roi' in config:
@@ -118,7 +123,7 @@ if __name__ == "__main__":
     # --- 1. 初始化预处理器 (离线步骤) ---
     # 在初始化时，从一个静态场景点云文件自动计算并存储地面模型。
     # 这个文件应该是清晰的、能代表一般场景地面的。
-    MODEL_PATH = "./pcd/0630_sta_10/frame_00003.pcd" 
+    MODEL_PATH = "./pcd/0718_i_01/frame_00100.pcd"
     try:
         preprocessor = PointCloudPreprocessor(model_pcd_path=MODEL_PATH)
     except ValueError as e:
@@ -129,17 +134,20 @@ if __name__ == "__main__":
         # --- 2. 定义实时处理的配置 ---
         # 你可以在这里灵活地组合和调整参数，而无需修改类代码。
         processing_config = {
-            'filter_by_distance': {
-                'max_dist': 60.0  # 只处理半径40米范围内的点
-            },
-            'filter_by_ground_plane': {
-                'ground_dist_threshold': 0.15,      # 距离地面0.15米内的点被视为地面
-                'max_height_above_ground': 3.0      # 保留离地3米以下的物体
-            }
+        'filter_by_ground_plane': {
+        'ground_dist_threshold': 0.3,      # 距离地面此距离内的点被视为地面
+        'max_height_above_ground': 3.0      # 保留离地此高度以下的物体
+        },              # 体素网格滤波器的体素大小
+        'filter_by_roi': {
+        'x_min': -40.0,     # 只看雷达前方 (X轴正方向)
+        'x_max': 40.0,    # 最远看到50米
+        'y_min': -50.0,   # Y轴方向，比如左右各10米宽的范围
+        'y_max': -5.0,
         }
+}
         
         # --- 3. 加载一个新帧并进行处理 (实时步骤) ---
-        frame_path = "./pcd/0630_sta_10/frame_00003.pcd"
+        frame_path = "./pcd/0718_i_01/frame_00100.pcd" 
         frame_to_process = o3d.io.read_point_cloud(frame_path)
 
         # 调用统一的preprocess方法

@@ -3,6 +3,7 @@ import open3d as o3d
 import numpy as np
 from collections import deque 
 from utils.config import VISUALIZATION_CONFIG
+import time
 
 class DynamicObjectDetector:
     def __init__(self, config):
@@ -11,7 +12,7 @@ class DynamicObjectDetector:
         :param config: 包含检测参数的字典，例如DETECTION_CONFIG。
         """
         self.distance_threshold = config.get('distance_threshold', 0.2)
-        self.dbscan_eps = config.get('dbscan_eps', 0.4)
+        self.dbscan_eps = config.get('dbscan_eps', 1.5)
         self.dbscan_min_points = config.get('dbscan_min_points', 15)
 
         # --- 新增代码 ---
@@ -117,7 +118,81 @@ class DynamicObjectDetector:
         dynamic_pcd = pcd_curr.select_by_index(final_motion_indices)
         
         return static_pcd, dynamic_pcd
-    
+
+    def detect_new(self, pcd_curr, pcd_prev):
+        """
+        检测动态物体（增强版）：
+        - 使用双向最近邻一致性过滤误报
+        - 加入多帧确认机制稳定动态判断
+        :return: (静态点云, 动态点云)
+        """
+        if not pcd_curr.has_points() or not pcd_prev.has_points():
+            return pcd_curr, o3d.geometry.PointCloud()
+
+        curr_points = np.asarray(pcd_curr.points)
+        prev_points = np.asarray(pcd_prev.points)
+
+        # KD-Tree 构建
+        kdtree_prev = o3d.geometry.KDTreeFlann(pcd_prev)
+        kdtree_curr = o3d.geometry.KDTreeFlann(pcd_curr)
+
+        # ========== STEP 1: 双向最近邻一致性判断 ==========
+        motion_indices = []
+        for i, pt in enumerate(curr_points):
+            # 当前点在上一帧中的最近邻
+            k1, idx1, _ = kdtree_prev.search_knn_vector_3d(pt, 1)
+            if k1 == 0:
+                continue
+            matched_pt = prev_points[idx1[0]]
+
+            # 反向最近邻判断
+            k2, idx2, _ = kdtree_curr.search_knn_vector_3d(matched_pt, 1)
+            if k2 == 0:
+                continue
+
+            if idx2[0] == i:  # 一致
+                dist = np.linalg.norm(pt - matched_pt)
+                if dist > self.distance_threshold:
+                    motion_indices.append(i)
+
+        motion_indices = np.array(motion_indices, dtype=int)
+
+        # ========== STEP 2: 多帧确认机制 ==========
+        if not hasattr(self, 'dynamic_index_buffer'):
+            from collections import deque
+            self.dynamic_index_buffer = deque(maxlen=3)
+
+        self.dynamic_index_buffer.append(set(motion_indices))
+
+        confirmed_indices = []
+        if len(self.dynamic_index_buffer) >= self.dynamic_index_buffer.maxlen:
+            for idx in motion_indices:
+                count = sum(idx in prev for prev in self.dynamic_index_buffer)
+                if count >= 2:  # 至少出现2次才认为是真动态
+                    confirmed_indices.append(idx)
+            motion_indices = np.array(confirmed_indices, dtype=int)
+
+        if motion_indices.size == 0:
+            return pcd_curr, o3d.geometry.PointCloud()
+
+        # ========== STEP 3: 最终动态点聚类与分离 ==========
+        final_motion_pcd = pcd_curr.select_by_index(motion_indices)
+
+        if not final_motion_pcd.has_points():
+            return pcd_curr, o3d.geometry.PointCloud()
+
+        # 为了聚类扩张，这一步保留也可以不做
+        kdtree_final_motion = o3d.geometry.KDTreeFlann(final_motion_pcd)
+
+        dists_sq_map_list = [kdtree_final_motion.search_knn_vector_3d(pt, 1)[2][0] for pt in curr_points]
+        dists_sq_map = np.array(dists_sq_map_list)
+        final_motion_indices = np.where(np.sqrt(dists_sq_map) < self.dbscan_eps / 2.0)[0]
+
+        static_pcd = pcd_curr.select_by_index(final_motion_indices, invert=True)
+        dynamic_pcd = pcd_curr.select_by_index(final_motion_indices)
+
+        return static_pcd, dynamic_pcd
+
     
     def detect3(self, pcd_curr, pcd_prev):
         """
@@ -336,3 +411,138 @@ class DynamicObjectDetector:
 
         # --- 步骤 5: 返回所有结果 ---
         return final_static_pcd, final_dynamic_pcd, dynamic_boxes, stable_boxes_for_this_frame
+    
+    def detect_efficient(self, pcd_curr, pcd_prev):
+        """
+        一个更高效的检测方法，采用“先聚类，再分类”的策略。
+        它只返回动态和静态点云，不处理包围盒，以获得最快的速度。
+
+        :param pcd_curr: 当前帧的预处理后点云。
+        :param pcd_prev: 前一帧的预处理后点云。
+        :return: (静态点云, 动态点云)
+        """
+        if not pcd_curr.has_points() or not pcd_prev.has_points():
+            return o3d.geometry.PointCloud(), o3d.geometry.PointCloud()
+
+        # --- 步骤 1: 对当前帧的完整点云进行DBSCAN聚类 ---
+        # 这是计算瓶颈，因此输入点云的数量至关重要。
+        # 建议在预处理时使用体素下采样来减少点数。
+        time_1 = time.time()
+        labels = np.array(pcd_curr.cluster_dbscan(
+            eps=self.dbscan_eps,
+            min_points=self.dbscan_min_points,
+            print_progress=False
+        ))
+        time_2 = time.time()
+        print(f"DBSCAN聚类耗时: {(time_2 - time_1) * 1000:.2f} ms")
+        # 获取所有有效簇的标签（忽略噪声点，其标签为-1）
+        unique_labels = np.unique(labels[labels >= 0])
+        
+        # 如果没有形成任何簇，则认为所有点都是静态的
+        if unique_labels.size == 0:
+            return pcd_curr, o3d.geometry.PointCloud()
+
+        # --- 步骤 2: 为前一帧点云构建KDTree，用于快速查询 ---
+        kdtree_prev = o3d.geometry.KDTreeFlann(pcd_prev)
+
+        # --- 步骤 3: 遍历每一个簇，判断其动/静属性 ---
+        dynamic_cluster_labels = []
+
+        for label in unique_labels:
+            # 找出属于当前簇的所有点的索引
+            cluster_indices = np.where(labels == label)[0]
+            
+            # 为了提高效率，我们只使用簇的中心点来代表整个簇进行判断
+            cluster_pcd = pcd_curr.select_by_index(cluster_indices)
+            cluster_center = cluster_pcd.get_center()
+
+            # 在前一帧的KDTree中搜索离簇中心最近的点
+            [k, idx, dist_sq] = kdtree_prev.search_knn_vector_3d(cluster_center, 1)
+
+            # 如果最近邻的距离大于阈值，则认为该簇是动态的
+            if k > 0 and np.sqrt(dist_sq[0]) > self.distance_threshold:
+                dynamic_cluster_labels.append(label)
+        
+        # --- 步骤 4: 根据分类结果，一次性分离动静态点云 ---
+        if not dynamic_cluster_labels:
+            # 如果没有检测到任何动态簇
+            return pcd_curr, o3d.geometry.PointCloud()
+        
+        # 使用np.isin高效地找出所有属于动态簇的点的索引
+        dynamic_indices = np.where(np.isin(labels, dynamic_cluster_labels))[0]
+
+        # 使用索引一次性分离点云
+        dynamic_pcd = pcd_curr.select_by_index(dynamic_indices)
+        static_pcd = pcd_curr.select_by_index(dynamic_indices, invert=True)
+
+        return static_pcd, dynamic_pcd
+    
+    # 请将这个新函数添加到您的 utils/detection.py 文件中
+    # 您可以保留旧的 detect3，或者直接用这个覆盖它
+    def detect3_optimized(self, pcd_curr, pcd_prev):
+        """
+        detect3的高效重构版本。
+        采用“先聚类，再分类”的策略来获得完整的动态物体，避免了逐点搜索和迭代扩展。
+    
+        :return: (静态点云, 动态点云)
+        """
+        # 步骤A: 检查输入是否有效 (不变)
+        if not pcd_curr.has_points() or not pcd_prev.has_points():
+            return pcd_curr, o3d.geometry.PointCloud()
+    
+        # =======================================================================
+        # 核心优化点: 不再逐点搜索，而是先对整帧进行一次聚类
+        # =======================================================================
+        
+        # 步骤B: 对当前帧的完整点云进行DBSCAN聚类
+        # 这是新的计算瓶颈，速度取决于输入点云的数量。
+        # 务必在预处理阶段使用体素下采样（Voxel Downsampling）来控制点数！
+        labels = np.array(pcd_curr.cluster_dbscan(
+            eps=self.dbscan_eps,
+            min_points=self.dbscan_min_points,
+            print_progress=False
+        ))
+        
+        # 获取所有有效物体的标签（忽略噪声点，其标签为-1）
+        unique_labels = np.unique(labels[labels >= 0])
+        
+        if unique_labels.size == 0:
+            # 如果没有形成任何物体簇，说明全是静态或噪声
+            return pcd_curr, o3d.geometry.PointCloud()
+    
+        # 步骤C: 为前一帧构建KDTree，用于快速查询
+        kdtree_prev = o3d.geometry.KDTreeFlann(pcd_prev)
+    
+        # =======================================================================
+        # 核心优化点: 不再对“点”进行动静判断，而是对“物体”进行判断
+        # =======================================================================
+    
+        # 步骤D: 遍历每一个“物体簇”，判断其动/静属性
+        dynamic_cluster_labels = []
+        for label in unique_labels:
+            # 找出属于当前簇的所有点的索引
+            cluster_indices = np.where(labels == label)[0]
+            
+            # 使用簇的中心点来代表整个簇进行判断，计算量极小
+            cluster_center = pcd_curr.select_by_index(cluster_indices).get_center()
+    
+            # 在前一帧中搜索离簇中心最近的点
+            [k, idx, dist_sq] = kdtree_prev.search_knn_vector_3d(cluster_center, 1)
+    
+            # 如果簇中心的移动距离大于阈值，则将整个簇标记为动态
+            if k > 0 and np.sqrt(dist_sq[0]) > self.distance_threshold:
+                dynamic_cluster_labels.append(label)
+        
+        # 步骤E: 根据分类结果，一次性分离动静态点云
+        if not dynamic_cluster_labels:
+            # 如果没有检测到任何动态簇
+            return pcd_curr, o3d.geometry.PointCloud()
+        
+        # 使用NumPy的isin函数，一次性找出所有动态簇包含的点的索引
+        dynamic_indices = np.where(np.isin(labels, dynamic_cluster_labels))[0]
+    
+        # 使用索引直接生成最终的动态和静态点云
+        dynamic_pcd = pcd_curr.select_by_index(dynamic_indices)
+        static_pcd = pcd_curr.select_by_index(dynamic_indices, invert=True)
+    
+        return static_pcd, dynamic_pcd

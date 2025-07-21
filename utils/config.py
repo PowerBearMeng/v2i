@@ -6,7 +6,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PCD_FOLDER = "/home/yty/mfh/mot/my_mot/pcd/0708_sta_01"  # PCD文件所在的文件夹
 # 用于计算地面模型的静态场景PCD文件
-MODEL_PATH = os.path.join(PCD_FOLDER, "frame_00010.pcd") 
+MODEL_PATH = os.path.join(PCD_FOLDER, "frame_00100.pcd") 
 
 # --- 预处理配置 ---
 PREPROCESSING_CONFIG = {
@@ -14,13 +14,11 @@ PREPROCESSING_CONFIG = {
         'ground_dist_threshold': 0.3,      # 距离地面此距离内的点被视为地面
         'max_height_above_ground': 3.0      # 保留离地此高度以下的物体
     },
-    # 'filter_by_distance': {
-    #     'max_dist': 50.0  # 半径
-    # },
+    'voxel_size': 0.1,                  # 体素网格滤波器的体素大小
     'filter_by_roi': {
         'x_min': -40.0,     # 只看雷达前方 (X轴正方向)
         'x_max': 40.0,    # 最远看到50米
-        'y_min': -3.0,   # Y轴方向，比如左右各10米宽的范围
+        'y_min': -30.0,   # Y轴方向，比如左右各10米宽的范围
         'y_max': 30.0,
    }
 }
@@ -28,7 +26,7 @@ PREPROCESSING_CONFIG = {
 # --- 动态检测配置 ---
 DETECTION_CONFIG = {
     'distance_threshold': 0.2,  # 两帧间点被视为“移动”的距离阈值
-    'dbscan_eps': 2.0,          # DBSCAN聚类半径
+    'dbscan_eps': 1.5,          # DBSCAN聚类半径
     'dbscan_min_points': 10     # 形成动态物体的最少点数
 }
 
