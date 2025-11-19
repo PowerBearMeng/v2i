@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 # --- 系统生成的文件 ---
 .DS_Store
+requirements.txt
