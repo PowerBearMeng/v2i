@@ -1,26 +1,37 @@
 # 文件: config.py
 
 import os
+import numpy as np
 # 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
 # --- 路径配置 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PCD_FOLDER = "/home/yty/mfh/mot/my_mot/pcd/0708_sta_01"  # PCD文件所在的文件夹
+PCD_FOLDER = "pcd/0825/test_i_02_renamed"  # PCD文件所在的文件夹
+# PCD_FOLDER = "/home/mfh/driving/data/carla/64_range_50m/test"  # PCD文件所在的文件夹
 # 用于计算地面模型的静态场景PCD文件
-MODEL_PATH = os.path.join(PCD_FOLDER, "frame_00100.pcd") 
+MODEL_PATH = os.path.join(PCD_FOLDER, "i_0010.pcd") 
+
 
 # --- 预处理配置 ---
 PREPROCESSING_CONFIG = {
     'filter_by_ground_plane': {
-        'ground_dist_threshold': 0.3,      # 距离地面此距离内的点被视为地面
+        'ground_dist_threshold': 0.2,      # 距离地面此距离内的点被视为地面
         'max_height_above_ground': 3.0      # 保留离地此高度以下的物体
     },
     'voxel_size': 0.1,                  # 体素网格滤波器的体素大小
     'filter_by_roi': {
-        'x_min': -40.0,     # 只看雷达前方 (X轴正方向)
-        'x_max': 40.0,    # 最远看到50米
-        'y_min': -30.0,   # Y轴方向，比如左右各10米宽的范围
-        'y_max': 30.0,
-   }
+        'x_min': -np.inf,     # 只看雷达前方 (X轴正方向)
+        'x_max': np.inf,    # 最远看到50米
+        'y_min': -np.inf,
+        'y_max': np.inf,
+    },
+    # 'filter_by_roi': {
+    #     'x_min': -10.0,     # 只看雷达前方 (X轴正方向)
+    #     'x_max': 20.0,    # 最远看到50米
+    #     'y_min': -64.0,
+    #     'y_max': 64.0,
+    #     'z_min': -4.0,
+    #     'z_max': 1.0
+    # }
 }
 
 # --- 动态检测配置 ---

@@ -2,6 +2,7 @@
 
 import open3d as o3d
 import numpy as np
+import time
 
 class PointCloudPreprocessor:
     """
@@ -75,14 +76,30 @@ class PointCloudPreprocessor:
         return pcd.select_by_index(np.where(final_mask)[0])
 
     def _filter_by_ground_and_height(self, pcd, config):
+        """
+        *** 核心改动 1: 此方法现在返回两个点云 (障碍物, 地面) ***
+        """
         if self.plane_model is None:
             raise RuntimeError("平面参数未设置。")
+            
         points = np.asarray(pcd.points)
+        # 计算所有点到预定义平面的有符号距离
         signed_distances = points @ self.plane_model[:3] + self.plane_model[3]
-        mask_not_ground = np.abs(signed_distances) > config.get('ground_dist_threshold', 0.1)
-        mask_not_ceiling = signed_distances < config.get('max_height_above_ground', 3.0)
-        final_mask = np.logical_and(mask_not_ground, mask_not_ceiling)
-        return pcd.select_by_index(np.where(final_mask)[0])
+        
+        # 1. 找到地面点的掩码
+        ground_dist_thresh = config.get('ground_dist_threshold', 0.1)
+        ground_mask = np.abs(signed_distances) <= ground_dist_thresh
+        
+        # 2. 找到非地面且非过高点（即障碍物）的掩码
+        max_height = config.get('max_height_above_ground', 3.0)
+        objects_mask = (signed_distances > ground_dist_thresh) & (signed_distances < max_height)
+
+        # 3. 根据掩码创建两个新的点云对象
+        objects_pcd = pcd.select_by_index(np.where(objects_mask)[0])
+        ground_pcd = pcd.select_by_index(np.where(ground_mask)[0])
+
+        # 4. 返回这两个点云
+        return objects_pcd, ground_pcd
 
     def _filter_by_distance(self, pcd, config):
         points = np.asarray(pcd.points)
@@ -91,39 +108,45 @@ class PointCloudPreprocessor:
         return pcd.select_by_index(np.where(mask)[0])
 
     def preprocess(self, pcd, config):
+        """
+        *** 核心改动 2: 此方法现在返回两个点云 (障碍物, 地面) ***
+        """
         processed_pcd = pcd
-        voxel_size = config.get('voxel_size')
-        if voxel_size and voxel_size > 0:
-            processed_pcd = processed_pcd.voxel_down_sample(voxel_size)
-            if self.verbose:
-                print(f"-> 体素下采样后 ({voxel_size}m): {len(processed_pcd.points)} 点")
+        # 初始化一个空的地面点云对象，以防配置中没有地面过滤步骤
+        ground_pcd = o3d.geometry.PointCloud()
+
         if self.verbose:
             print(f"\n开始预处理，原始点数: {len(processed_pcd.points)}")
-        if 'filter_by_roi' in config:
-            params = config['filter_by_roi']
-            processed_pcd = self._filter_by_roi(processed_pcd, params)
-            if self.verbose:
-                print(f"-> ROI过滤后 ({params}): {len(processed_pcd.points)} 点")
-        # if 'filter_by_distance' in config:
-        #     params = config['filter_by_distance']
-        #     processed_pcd = self._filter_by_distance(processed_pcd, params)
+        start_time = time.time()
+        
+        # if 'filter_by_roi' in config:
+        #     params = config['filter_by_roi']
+        #     processed_pcd = self._filter_by_roi(processed_pcd, params)
+        #     roi_time = time.time()
         #     if self.verbose:
-        #         print(f"-> 距离过滤后 ({params}): {len(processed_pcd.points)} 点")
+        #         print(f"-> ROI过滤后 ({params}): {len(processed_pcd.points)} 点, time: {(roi_time - start_time) * 1000:.2f} ms")
+
         if 'filter_by_ground_plane' in config:
             params = config['filter_by_ground_plane']
-            processed_pcd = self._filter_by_ground_and_height(processed_pcd, params)
+            # 接收两个返回的点云
+            processed_pcd, ground_pcd = self._filter_by_ground_and_height(processed_pcd, params)
+            ground_time = time.time()
             if self.verbose:
-                print(f"-> 地面/过高点过滤后 ({params}): {len(processed_pcd.points)} 点")
+                # 更新打印信息，显示两个点云的数量
+                print(f"-> 地面/过高点过滤后: {len(processed_pcd.points)} 点 (障碍物), {len(ground_pcd.points)} 点 (地面), time: {(ground_time - start_time) * 1000:.2f} ms")
+
         if self.verbose:
             print("预处理完成。")
-        return processed_pcd
+            
+        # 返回处理后的障碍物点云和地面点云
+        return processed_pcd, ground_pcd
 
 # --- 用法示例 ---
 if __name__ == "__main__":
     # --- 1. 初始化预处理器 (离线步骤) ---
     # 在初始化时，从一个静态场景点云文件自动计算并存储地面模型。
     # 这个文件应该是清晰的、能代表一般场景地面的。
-    MODEL_PATH = "./pcd/0718_i_01/frame_00100.pcd"
+    MODEL_PATH = "./pcd/0825/test_i_02_renamed/i_1000.pcd" 
     try:
         preprocessor = PointCloudPreprocessor(model_pcd_path=MODEL_PATH)
     except ValueError as e:
@@ -135,30 +158,32 @@ if __name__ == "__main__":
         # 你可以在这里灵活地组合和调整参数，而无需修改类代码。
         processing_config = {
         'filter_by_ground_plane': {
-        'ground_dist_threshold': 0.3,      # 距离地面此距离内的点被视为地面
-        'max_height_above_ground': 3.0      # 保留离地此高度以下的物体
+        'ground_dist_threshold': 0.2,      # 距离地面此距离内的点被视为地面
+        'max_height_above_ground': 2.0      # 保留离地此高度以下的物体
         },              # 体素网格滤波器的体素大小
         'filter_by_roi': {
-        'x_min': -40.0,     # 只看雷达前方 (X轴正方向)
-        'x_max': 40.0,    # 最远看到50米
-        'y_min': -50.0,   # Y轴方向，比如左右各10米宽的范围
-        'y_max': -5.0,
-        }
+        'x_min': -10.0,     # 只看雷达前方 (X轴正方向)
+        'x_max': 20.0,    # 最远看到50米
+        'y_min': -64.0,
+        'y_max': 64.0,
+        'z_min': -4.0,
+        'z_max': 1.0
+    }
 }
         
         # --- 3. 加载一个新帧并进行处理 (实时步骤) ---
-        frame_path = "./pcd/0718_i_01/frame_00100.pcd" 
+        frame_path = "./pcd/0825/test_i_02_renamed/i_1000.pcd" 
         frame_to_process = o3d.io.read_point_cloud(frame_path)
 
         # 调用统一的preprocess方法
-        clean_pcd = preprocessor.preprocess(frame_to_process, processing_config)
-        
+        clean_pcd, ground = preprocessor.preprocess(frame_to_process, processing_config)
+
         # --- 4. 可视化结果 ---
         # 将处理后的点云染成红色，以便和原始点云对比
         frame_to_process.paint_uniform_color([0.7, 0.7, 0.7]) # 原始点云为灰色
         clean_pcd.paint_uniform_color([1.0, 0, 0])          # 处理后点云为红色
-
+        ground.paint_uniform_color([0, 1.0, 0])             # 地面点云为绿色
         o3d.visualization.draw_geometries(
-            [frame_to_process, clean_pcd],
-            window_name="红色: 预处理后 | 灰色: 原始点云"
+            [frame_to_process, clean_pcd, ground],
+            window_name="红色: 预处理后 | 灰色: 原始点云 | 绿色: 地面点云"
         )
