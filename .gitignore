@@ -1,0 +1,11 @@
+# --- 数据和输出结果 ---
+pcd/
+fused_output/
+match/
+ros/
+test/
+# --- Python 编译缓存 (垃圾文件) ---
+__pycache__/
+*.pyc
+# --- 系统生成的文件 ---
+.DS_Store
